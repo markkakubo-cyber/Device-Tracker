@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>DeviceTrack — Your Devices</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root {
+    --bg: #0C1117; --panel: #151C26; --panel2: #1B2431; --line: #26313F;
+    --text: #E6EDF5; --muted: #7D8A9C; --accent: #3DDC97; --danger: #FF6B6B;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); font-family:'Segoe UI', system-ui, sans-serif; min-height:100vh; }
+  header { display:flex; justify-content:space-between; align-items:center; padding:16px 22px; border-bottom:1px solid var(--line); }
+  .brand { font-weight:700; font-size:18px; letter-spacing:-0.3px; }
+  .brand span { color:var(--accent); }
+  .btn { background:var(--accent); color:#06140E; border:none; padding:10px 18px; border-radius:8px; font-weight:700; cursor:pointer; font-size:14px; }
+  .btn:disabled { opacity:0.5; cursor:default; }
+  .btn-ghost { background:transparent; color:var(--muted); border:1px solid var(--line); }
+  .btn-danger { background:transparent; color:var(--danger); border:1px solid rgba(255,107,107,0.35); }
+  input { background:var(--panel2); border:1px solid var(--line); color:var(--text); padding:12px 14px; border-radius:8px; font-size:14px; width:100%; outline:none; }
+  input:focus { border-color:var(--accent); }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:22px; }
+  .screen { display:none; }
+  .screen.active { display:block; }
+
+  /* Login */
+  .login-wrap { max-width:380px; margin:90px auto; padding:0 20px; }
+  .login-wrap h1 { font-size:24px; margin-bottom:6px; }
+  .login-wrap p { color:var(--muted); font-size:14px; margin-bottom:22px; line-height:1.6; }
+  .field { margin-bottom:12px; }
+  .msg { font-size:13px; margin-top:10px; min-height:18px; }
+  .msg.err { color:var(--danger); }
+  .msg.ok { color:var(--accent); }
+
+  /* Dashboard */
+  .layout { display:grid; grid-template-columns:320px 1fr; gap:18px; padding:18px; height:calc(100vh - 66px); }
+  .side { display:flex; flex-direction:column; gap:14px; overflow-y:auto; }
+  .device-item { padding:14px; border-radius:10px; background:var(--panel2); border:1px solid var(--line); cursor:pointer; }
+  .device-item.sel { border-color:var(--accent); }
+  .device-name { font-weight:700; font-size:15px; }
+  .device-meta { color:var(--muted); font-size:12px; margin-top:4px; }
+  .token-box { font-family:monospace; font-size:12px; background:var(--bg); padding:10px; border-radius:8px; word-break:break-all; margin-top:10px; border:1px dashed var(--accent); }
+  .map { border-radius:12px; border:1px solid var(--line); min-height:300px; }
+  .section-label { font-size:11px; letter-spacing:1px; color:var(--muted); text-transform:uppercase; margin-bottom:8px; font-weight:700; }
+  .hint { color:var(--muted); font-size:12.5px; line-height:1.6; margin-top:8px; }
+
+  /* Reporter */
+  .reporter { max-width:420px; margin:60px auto; padding:0 20px; text-align:center; }
+  .reporter h1 { font-size:22px; margin-bottom:10px; }
+  .pulse { width:14px; height:14px; border-radius:50%; background:var(--accent); margin:20px auto; animation:pulse 1.6s infinite; }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(61,220,151,0.6);} 100%{box-shadow:0 0 0 18px rgba(61,220,151,0);} }
+
+  @media (max-width:800px) {
+    .layout { grid-template-columns:1fr; height:auto; }
+    .map { min-height:320px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div class="screen" id="loginScreen">
+  <div class="login-wrap">
+    <h1>DeviceTrack</h1>
+    <p>Sign in to see the devices you own. Only you can see your devices, and each device only reports using its own secret token.</p>
+    <div class="field"><input type="email" id="email" placeholder="Email"/></div>
+    <div class="field"><input type="password" id="password" placeholder="Password"/></div>
+    <button class="btn" style="width:100%" onclick="login()">Sign in</button>
+    <div class="msg" id="loginMsg"></div>
+  </div>
+</div>
+
+<!-- DASHBOARD -->
+<div class="screen" id="dashScreen">
+  <header>
+    <div class="brand">Device<span>Track</span></div>
+    <button class="btn btn-ghost" onclick="logout()">Sign out</button>
+  </header>
+  <div class="layout">
+    <div class="side">
+      <div class="card">
+        <div class="section-label">Register a device</div>
+        <div class="field"><input type="text" id="deviceName" placeholder="e.g. My Infinix Note 30 Pro"/></div>
+        <button class="btn" style="width:100%" onclick="addDevice()">Add device</button>
+        <div class="msg" id="addMsg"></div>
+      </div>
+      <div class="card">
+        <div class="section-label">Your devices</div>
+        <div id="deviceList"><div class="hint">No devices yet.</div></div>
+      </div>
+      <div class="card" id="setupCard" style="display:none;">
+        <div class="section-label">Set up this device</div>
+        <div class="hint">Open this link on the device you're tracking and allow location:</div>
+        <div class="token-box" id="reporterLink"></div>
+        <div class="hint">Keep this link private. Anyone with it can send location for this device.</div>
+        <button class="btn btn-danger" style="width:100%;margin-top:12px" onclick="deleteDevice()">Remove this device</button>
+      </div>
+    </div>
+    <div class="map" id="map"></div>
+  </div>
+</div>
+
+<!-- REPORTER (opened on the device being tracked) -->
+<div class="screen" id="reporterScreen">
+  <div class="reporter">
+    <h1>Location sharing</h1>
+    <div class="pulse" id="pulse"></div>
+    <p class="hint" id="reporterStatus">Starting...</p>
+    <p class="hint" style="margin-top:20px;">Keep this page open on the device to keep it updated.</p>
+  </div>
+</div>
+
+<script>
+const SUPABASE_URL = 'https://osvnlwvdwlaubtmdmhjl.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9zdm5sd3Zkd2xhdWJ0bWRtaGpsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE1OTI3ODgsImV4cCI6MjEwNzE2ODc4OH0.9785aPTuoT3ukcBvsK49Y5H3zE21b4AdFeoL1brOnf0';
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+let map, markers = {}, devices = [], selectedId = null;
+
+// Route: ?report=TOKEN opens the reporter page on the device
+const params = new URLSearchParams(location.search);
+const reportToken = params.get('report');
+
+function show(id) {
+  ['loginScreen','dashScreen','reporterScreen'].forEach(s =>
+    document.getElementById(s).classList.toggle('active', s === id));
+}
+
+// ── REPORTER MODE ──
+function startReporter(token) {
+  show('reporterScreen');
+  const status = document.getElementById('reporterStatus');
+  if (!navigator.geolocation) { status.textContent = 'This device has no location support.'; return; }
+  navigator.geolocation.watchPosition(async pos => {
+    const { latitude, longitude } = pos.coords;
+    const { error } = await db.rpc('report_location', {
+      p_token: token, p_lat: latitude, p_lng: longitude
+    });
+    status.textContent = error
+      ? 'Could not send location. Check the link.'
+      : `Location shared at ${new Date().toLocaleTimeString()}`;
+  }, err => {
+    status.textContent = 'Location permission denied. Allow it to share.';
+  }, { enableHighAccuracy: true, maximumAge: 15000 });
+}
+
+// ── AUTH ──
+async function login() {
+  const email = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+  const msg = document.getElementById('loginMsg');
+  msg.className = 'msg'; msg.textContent = 'Signing in...';
+  const { error } = await db.auth.signInWithPassword({ email, password });
+  if (error) { msg.className = 'msg err'; msg.textContent = error.message; return; }
+  enterDashboard();
+}
+async function logout() {
+  await db.auth.signOut();
+  show('loginScreen');
+}
+
+async function enterDashboard() {
+  show('dashScreen');
+  if (!map) {
+    map = L.map('map').setView([-13.0, 28.0], 5);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
+  }
+  setTimeout(() => map.invalidateSize(), 100);
+  await loadDevices();
+}
+
+// ── DEVICES ──
+async function loadDevices() {
+  const { data, error } = await db.from('devices').select('*').order('name');
+  if (error) { document.getElementById('deviceList').innerHTML = `<div class="hint">${error.message}</div>`; return; }
+  devices = data || [];
+  renderDevices();
+  devices.forEach(placeMarker);
+  if (devices.length && !selectedId) selectDevice(devices[0].id);
+}
+
+function renderDevices() {
+  const list = document.getElementById('deviceList');
+  if (!devices.length) { list.innerHTML = '<div class="hint">No devices yet.</div>'; return; }
+  list.innerHTML = devices.map(d => `
+    <div class="device-item ${d.id === selectedId ? 'sel' : ''}" onclick="selectDevice('${d.id}')">
+      <div class="device-name">${escapeHtml(d.name)}</div>
+      <div class="device-meta">${d.last_seen ? 'Last seen ' + new Date(d.last_seen).toLocaleString() : 'Not reported yet'}</div>
+    </div>
+  `).join('');
+}
+
+async function addDevice() {
+  const name = document.getElementById('deviceName').value.trim();
+  const msg = document.getElementById('addMsg');
+  if (!name) { msg.className = 'msg err'; msg.textContent = 'Give the device a name.'; return; }
+  const { data: { user } } = await db.auth.getUser();
+  const { data, error } = await db.from('devices').insert({ name, owner_id: user.id }).select().single();
+  if (error) { msg.className = 'msg err'; msg.textContent = error.message; return; }
+  msg.className = 'msg ok'; msg.textContent = 'Device added.';
+  document.getElementById('deviceName').value = '';
+  await loadDevices();
+  selectDevice(data.id);
+}
+
+async function deleteDevice() {
+  if (!selectedId || !confirm('Remove this device?')) return;
+  await db.from('devices').delete().eq('id', selectedId);
+  if (markers[selectedId]) { map.removeLayer(markers[selectedId]); delete markers[selectedId]; }
+  selectedId = null;
+  document.getElementById('setupCard').style.display = 'none';
+  await loadDevices();
+}
+
+function selectDevice(id) {
+  selectedId = id;
+  renderDevices();
+  const d = devices.find(x => x.id === id);
+  if (!d) return;
+  const link = `${location.origin}${location.pathname}?report=${d.token}`;
+  document.getElementById('reporterLink').textContent = link;
+  document.getElementById('setupCard').style.display = 'block';
+  if (d.last_lat && d.last_lng) map.setView([d.last_lat, d.last_lng], 14);
+}
+
+function placeMarker(d) {
+  if (!d.last_lat || !d.last_lng) return;
+  if (markers[d.id]) map.removeLayer(markers[d.id]);
+  markers[d.id] = L.marker([d.last_lat, d.last_lng]).addTo(map)
+    .bindPopup(`<b>${escapeHtml(d.name)}</b><br>${d.last_seen ? new Date(d.last_seen).toLocaleString() : ''}`);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// ── START ──
+(async function init() {
+  if (reportToken) { startReporter(reportToken); return; }
+  const { data: { session } } = await db.auth.getSession();
+  if (session) enterDashboard(); else show('loginScreen');
+})();
+
+// Live refresh every 15s so new locations appear
+setInterval(() => { if (document.getElementById('dashScreen').classList.contains('active')) loadDevices(); }, 15000);
+</script>
+</body>
+</html>
