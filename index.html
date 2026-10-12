@@ -227,6 +227,21 @@ function selectDevice(id) {
   document.getElementById('reporterLink').textContent = link;
   document.getElementById('setupCard').style.display = 'block';
   if (d.last_lat && d.last_lng) map.setView([d.last_lat, d.last_lng], 14);
+  drawRoute(d.id);
+}
+
+let routeLine = null;
+async function drawRoute(deviceId) {
+  if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+  const { data, error } = await db.from('location_history')
+    .select('lat,lng,recorded_at')
+    .eq('device_id', deviceId)
+    .order('recorded_at', { ascending: true })
+    .limit(500);
+  if (error || !data || data.length < 2) return;
+  const points = data.map(p => [p.lat, p.lng]);
+  routeLine = L.polyline(points, { color: '#3DDC97', weight: 4, opacity: 0.8 }).addTo(map);
+  map.fitBounds(routeLine.getBounds(), { padding: [30, 30] });
 }
 
 function placeMarker(d) {
